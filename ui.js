@@ -1,4 +1,5 @@
-import { saveSettingsDebounced, getRequestHeaders, callPopup } from '../../../../script.js';
+import { saveSettingsDebounced, getRequestHeaders } from '../../../../script.js';
+import { callGenericPopup, POPUP_RESULT, POPUP_TYPE } from '../../../popup.js';
 import { getContext, extension_settings, renderExtensionTemplate } from '../../../extensions.js';
 
 import {
@@ -153,9 +154,9 @@ async function onCharacterRemoveClick() {
     if (extension_settings.live2d.characterModelsSettings[character] !== undefined)
         nb_character_models = Object.keys(extension_settings.live2d.characterModelsSettings[character]).length;
     const template = `<div class="m-b-1">Are you sure you want to remove all live2d model settings for character ${character}? (model settings: ${nb_character_models})</div>`;
-    const confirmation = await callPopup(template, 'confirm');
+    const confirmation = await callGenericPopup(template, POPUP_TYPE.CONFIRM);
 
-    if (confirmation) {
+    if (confirmation === POPUP_RESULT.AFFIRMATIVE) {
         $('#live2d_model_select').val('none');
         $('#live2d_model_settings').hide();
         delete extension_settings.live2d.characterModelMapping[character];

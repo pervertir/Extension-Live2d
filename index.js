@@ -50,7 +50,9 @@ IDEAS:
 */
 import { eventSource, event_types, getCharacters } from '../../../../script.js';
 import { extension_settings, getContext, ModuleWorkerWrapper } from '../../../extensions.js';
-import { registerSlashCommand } from '../../../slash-commands.js';
+import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
+import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
+import { ARGUMENT_TYPE, SlashCommandNamedArgument } from '../../../slash-commands/SlashCommandArgument.js';
 export { MODULE_NAME };
 
 import {
@@ -295,14 +297,35 @@ jQuery(async () => {
     updateCharactersListOnce();
     updateCharactersModels();
 
-    registerSlashCommand('live2dexpression', setExpressionSlashCommand, [], '<span class="monospace">(character="characterName" motion="motionGroup_id=motionId")</span> – play live2d model motion (example: /live2dmotion character="Shizuku" motion="tap_body_id=0" /live2dmotion character="Aqua" motion="_id=1"', true, true);
-    registerSlashCommand('live2dmotion', setMotionSlashCommand, [], '<span class="monospace">(character="characterName" expression="expressionName")</span> – play live2d model motion (example: /live2dexpression character="Shizuku" expression="f01" /live2dexpression character="Aqua" expression="Happy"', true, true);
-    registerSlashCommand('live2dparameter', setParameterSlashCommand, [], '<span class="monospace">(character="characterName" id="parameterId" value="parameterValue")</span> – change live2d model parameter (example: /live2dparameter character="Shizuku" id="ParamBrowLY" value=0', true, true)
-    registerSlashCommand('live2dresetparameters', resetParametersSlashCommand, [], '<span class="monospace">(character="characterName" id="parameterId" value="parameterValue")</span> – change live2d model parameter (example: /live2dparameter character="Shizuku" id="ParamBrowLY" value=0', true, true)
+    registerSlashCommands();
 
     console.debug(DEBUG_PREFIX,'Finish loaded.');
 
 });
+
+function registerSlashCommands() {
+    const stringArg = (name, description, isRequired = true) => SlashCommandNamedArgument.fromProps({
+        name,
+        description,
+        typeList: [ARGUMENT_TYPE.STRING],
+        isRequired,
+    });
+    const character = stringArg('character', 'character name');
+    const addCommand = (name, callback, namedArgumentList, helpString) => SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+        name,
+        callback: async (args) => {
+            await callback(args);
+            return '';
+        },
+        namedArgumentList,
+        helpString,
+    }));
+
+    addCommand('live2dexpression', setExpressionSlashCommand, [character, stringArg('expression', 'expression name')], 'Play a Live2D model expression. Example: <code>/live2dexpression character="Shizuku" expression="f01"</code>');
+    addCommand('live2dmotion', setMotionSlashCommand, [character, stringArg('motion', 'motion group and id')], 'Play a Live2D model motion. Example: <code>/live2dmotion character="Shizuku" motion="tap_body_id=0"</code>');
+    addCommand('live2dparameter', setParameterSlashCommand, [character, stringArg('id', 'parameter id'), stringArg('value', 'parameter value')], 'Change a Live2D model parameter. Example: <code>/live2dparameter character="Shizuku" id="ParamBrowLY" value=0</code>');
+    addCommand('live2dresetparameters', resetParametersSlashCommand, [character], 'Reset all Live2D model parameters. Example: <code>/live2dresetparameters character="Shizuku"</code>');
+}
 
 // Example /live2dexpression character="Xixuegi" expression="f01"
 async function setExpressionSlashCommand(args) {

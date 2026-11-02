@@ -1,5 +1,5 @@
 
-import { getExpressionLabel } from '../../expressions/index.js';
+import { getExpressionLabel, lastExpression } from '../../expressions/index.js';
 import { getRequestHeaders, saveSettings, saveSettingsDebounced, sendMessageAsUser } from '../../../../script.js';
 import { getContext, extension_settings } from '../../../extensions.js';
 
@@ -36,6 +36,10 @@ let is_talking = {};
 let abortTalking = {};
 let previous_interaction = { 'character': '', 'message': '' };
 let last_motion = {};
+
+// expressions API values that spend an LLM call per classification (llm, webllm)
+const LLM_EXPRESSION_APIS = [2, 3];
+const SHARED_LABEL_TIMEOUT = 120000;
 
 async function onHitAreasClick(character, hitAreas) {
     const model_path = extension_settings.live2d.characterModelMapping[character];
@@ -344,6 +348,59 @@ async function loadLive2d(visible = true) {
     console.debug(DEBUG_PREFIX, 'Models:', models);
 }
 
+/**
+ * Finds the sprite folder ST's Expressions extension uses for a message.
+ */
+function getSpriteFolder(message) {
+    const context = getContext();
+    const avatar = (context.groupId ? message.original_avatar : context.characters[context.characterId]?.avatar)?.replace(/\.[^/.]+$/, '');
+    const override = extension_settings.expressionOverrides?.find(e => e.name == avatar);
+    return override?.path || message.name;
+}
+
+/**
+ * ST's Expressions only classifies characters that have sprites, or all of them when default sprites are on.
+ */
+async function expressionsWillClassify(folder) {
+    if (extension_settings.disabledExtensions?.includes('expressions'))
+        return false;
+
+    if (extension_settings.expressions.showDefault)
+        return true;
+
+    const result = await fetch(`/api/sprites/get?name=${encodeURIComponent(folder)}`);
+    return result.ok && (await result.json()).length > 0;
+}
+
+/**
+ * Gets the label of a message. In LLM modes, reuses ST's classification when it makes one, so a message costs one LLM call.
+ */
+async function getMessageLabel(message) {
+    const folder = getSpriteFolder(message);
+
+    if (!LLM_EXPRESSION_APIS.includes(extension_settings.expressions.api) || !(await expressionsWillClassify(folder)))
+        return getExpressionLabel(message.mes);
+
+    const key = folder.split('/')[0];
+
+    // ST doesn't classify a repeated text again
+    const previous = getContext().chat.slice(0, -1).findLast(m => !m.is_user && !m.is_system);
+    if (previous?.mes === message.mes && key in lastExpression)
+        return lastExpression[key];
+
+    delete lastExpression[key];
+
+    const start = Date.now();
+    while (!(key in lastExpression)) {
+        if (Date.now() - start > SHARED_LABEL_TIMEOUT) {
+            console.debug(DEBUG_PREFIX, 'Timed out waiting for the Expressions label of', key);
+            return extension_settings.expressions.fallback_expression;
+        }
+        await delay(100);
+    }
+    return lastExpression[key];
+}
+
 async function updateExpression(chat_id) {
     const message = getContext().chat[chat_id];
     const character = message.name;
@@ -363,7 +420,7 @@ async function updateExpression(chat_id) {
         return;
     }
 
-    const expression = await getExpressionLabel(message.mes);
+    const expression = await getMessageLabel(message);
     // Empty or custom labels have no mapping: use the default animation
     const mapping = extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'][expression];
     let model_expression = mapping?.['expression'] ?? 'none';
