@@ -1,12 +1,11 @@
 
-import { trimToEndSentence, trimToStartSentence } from '../../../utils.js';
+import { getExpressionLabel } from '../../expressions/index.js';
 import { getRequestHeaders, saveSettings, saveSettingsDebounced, sendMessageAsUser } from '../../../../script.js';
-import { getContext, extension_settings, getApiUrl, doExtrasFetch, modules } from '../../../extensions.js';
+import { getContext, extension_settings } from '../../../extensions.js';
 
 import {
     DEBUG_PREFIX,
     live2d,
-    FALLBACK_EXPRESSION,
     CANVAS_ID,
     delay,
     SPRITE_DIV,
@@ -37,12 +36,6 @@ let is_talking = {};
 let abortTalking = {};
 let previous_interaction = { 'character': '', 'message': '' };
 let last_motion = {};
-
-const EXPRESSION_API = {
-    local: 0,
-    extras: 1,
-    llm: 2,
-};
 
 async function onHitAreasClick(character, hitAreas) {
     const model_path = extension_settings.live2d.characterModelMapping[character];
@@ -366,9 +359,15 @@ async function updateExpression(chat_id) {
         return;
     }
 
+    if (!extension_settings.live2d.enabled || models[character] === undefined) {
+        return;
+    }
+
     const expression = await getExpressionLabel(message.mes);
-    let model_expression = extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'][expression]['expression'];
-    let model_motion = extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'][expression]['motion'];
+    // Empty or custom labels have no mapping: use the default animation
+    const mapping = extension_settings.live2d.characterModelsSettings[character][model_path]['classify_mapping'][expression];
+    let model_expression = mapping?.['expression'] ?? 'none';
+    let model_motion = mapping?.['motion'] ?? 'none';
 
     console.debug(DEBUG_PREFIX,'Detected expression in message:',expression);
 
@@ -391,55 +390,6 @@ async function updateExpression(chat_id) {
 
     if (model_motion != 'none') {
         await playMotion(character, model_motion);
-    }
-}
-
-async function getExpressionLabel(text) {
-    // Return if text is undefined, saving a costly fetch request
-    if ((!modules.includes('classify') && extension_settings.expressions.api === EXPRESSION_API.extras) || !text) {
-        return FALLBACK_EXPRESSION;
-    }
-
-    text = sampleClassifyText(text);
-
-    try {
-        // TODO: proper LLM classification
-        if (extension_settings.expressions.api === EXPRESSION_API.local || extension_settings.api === EXPRESSION_API.llm) {
-            // Local transformers pipeline
-            const apiResult = await fetch('/api/extra/classify', {
-                method: 'POST',
-                headers: getRequestHeaders(),
-                body: JSON.stringify({ text: text }),
-            });
-
-            if (apiResult.ok) {
-                const data = await apiResult.json();
-                return data.classification[0].label;
-            }
-        } else if (extension_settings.expressions.api === EXPRESSION_API.extras) {
-            // Extras
-            const url = new URL(getApiUrl());
-            url.pathname = '/api/classify';
-
-            const apiResult = await doExtrasFetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Bypass-Tunnel-Reminder': 'bypass',
-                },
-                body: JSON.stringify({ text: text }),
-            });
-
-            if (apiResult.ok) {
-                const data = await apiResult.json();
-                return data.classification[0].label;
-            }
-        } else {
-            return FALLBACK_EXPRESSION;
-        }
-    } catch (error) {
-        console.log(error);
-        return FALLBACK_EXPRESSION;
     }
 }
 
@@ -468,34 +418,6 @@ async function removeModel(character) {
         delete models[character];
         console.debug(DEBUG_PREFIX,'Delete model from memory for', character);
     }
-}
-
-/**
- * Processes the classification text to reduce the amount of text sent to the API.
- * Quotes and asterisks are to be removed. If the text is less than 300 characters, it is returned as is.
- * If the text is more than 300 characters, the first and last 150 characters are returned.
- * The result is trimmed to the end of sentence.
- * @param {string} text The text to process.
- * @returns {string}
- */
-function sampleClassifyText(text) {
-    if (!text) {
-        return text;
-    }
-
-    // Remove asterisks and quotes
-    let result = text.replace(/[\*\"]/g, '');
-
-    const SAMPLE_THRESHOLD = 300;
-    const HALF_SAMPLE_THRESHOLD = SAMPLE_THRESHOLD / 2;
-
-    if (text.length < SAMPLE_THRESHOLD) {
-        result = trimToEndSentence(result);
-    } else {
-        result = trimToEndSentence(result.slice(0, HALF_SAMPLE_THRESHOLD)) + ' ' + trimToStartSentence(result.slice(-HALF_SAMPLE_THRESHOLD));
-    }
-
-    return result.trim();
 }
 
 async function playExpression(character, expression) {
